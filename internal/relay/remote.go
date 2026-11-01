@@ -11,23 +11,28 @@ import (
 
 // RemoteConfig configures the remote (server) relay.
 type RemoteConfig struct {
-	ListenPort    uint16
-	ForwardAddr   string
-	ClientIP      net.IP
-	ClientPort    uint16
-	SpoofIP       net.IP
-	SpoofIPs      []net.IP
-	SpoofPort     uint16
-	PeerSpoofIP   net.IP
-	SendTransport string // "tcp", "udp", "icmp", "icmpv6"
-	RecvTransport string // "tcp", "udp", "icmp", "icmpv6"
-	XDPInterface  string // network interface for XDP (empty = disabled)
+	ListenPort      uint16
+	ForwardAddr     string
+	ClientIP        net.IP
+	ClientPort      uint16
+	SpoofIP         net.IP
+	SpoofIPs        []net.IP
+	SpoofIPFile     string // pool file for hot-reload of forged sources (empty = none)
+	SpoofPort       uint16
+	PeerSpoofIP     net.IP   // single pinned peer source (back-compat)
+	PeerSpoofIPs    []net.IP // set of accepted peer sources (multi-IP); empty = use PeerSpoofIP
+	PeerSpoofIPFile string   // pool file for hot-reload of the accept set (empty = none)
+	SendTransport   string   // "tcp", "udp", "icmp", "icmpv6"
+	RecvTransport   string   // "tcp", "udp", "icmp", "icmpv6"
+	XDPInterface    string   // network interface for XDP (empty = disabled)
 }
 
 type Remote struct {
 	cfg     RemoteConfig
 	recver  transport.Receiver
-	sender  transport.Sender
+	sender  *swapSender
+	accept  acceptSet
+	stop    chan struct{}
 	udpConn *net.UDPConn
 	fwdAddr *net.UDPAddr
 
@@ -54,9 +59,15 @@ func NewRemote(cfg RemoteConfig) (*Remote, error) {
 		}
 	}
 
+	// A set of accepted peer sources means accept-any at the receiver (nil) and
+	// filter the set here in Go; a single pinned peer keeps kernel/Rust filtering.
+	recvPeer := cfg.PeerSpoofIP
+	if len(cfg.PeerSpoofIPs) > 0 {
+		recvPeer = nil
+	}
 	recver, err := transport.NewReceiver(cfg.RecvTransport, transport.ReceiverConfig{
 		ListenPort:   cfg.ListenPort,
-		PeerSpoofIP:  cfg.PeerSpoofIP,
+		PeerSpoofIP:  recvPeer,
 		BufferSize:   4 * 1024 * 1024,
 		UseXDP:       cfg.XDPInterface != "",
 		XDPInterface: cfg.XDPInterface,
@@ -86,17 +97,11 @@ func NewRemote(cfg RemoteConfig) (*Remote, error) {
 		return nil, err
 	}
 
-	senderCfg := transport.SenderConfig{
-		SourcePort: cfg.SpoofPort,
-		MTU:        1400,
+	senderIPs := cfg.SpoofIPs
+	if len(senderIPs) == 0 {
+		senderIPs = []net.IP{cfg.SpoofIP}
 	}
-	if len(cfg.SpoofIPs) > 0 {
-		senderCfg.SourceIPs = cfg.SpoofIPs
-	} else {
-		senderCfg.SourceIP = cfg.SpoofIP
-	}
-
-	sender, err := transport.NewSender(cfg.SendTransport, senderCfg)
+	sender, err := newSwapSender(cfg.SendTransport, cfg.SpoofPort, 1400, senderIPs)
 	if err != nil {
 		recver.Close()
 		udpConn.Close()
@@ -106,29 +111,42 @@ func NewRemote(cfg RemoteConfig) (*Remote, error) {
 		return nil, err
 	}
 
-	return &Remote{
+	r := &Remote{
 		cfg:            cfg,
 		recver:         recver,
 		sender:         sender,
 		udpConn:        udpConn,
 		fwdAddr:        fwdAddr,
+		stop:           make(chan struct{}),
 		icmpSuppressed: icmpSuppressed,
-	}, nil
+	}
+	r.accept.set(cfg.PeerSpoofIPs)
+	return r, nil
 }
 
 func (r *Remote) Run() {
 	go r.uplinkLoop()
 	go r.statsLoop()
+	go poolReloader(r.stop, defaultReloadInterval,
+		r.cfg.SpoofIPFile, func(ips []net.IP) {
+			if err := r.sender.setIPs(ips); err != nil {
+				log.Printf("[reload] applying forged sources: %v", err)
+			}
+		},
+		r.cfg.PeerSpoofIPFile, r.accept.set)
 	r.downlinkLoop()
 }
 
 func (r *Remote) uplinkLoop() {
 	for {
-		data, _, _, err := r.recver.Receive()
+		data, srcIP, _, err := r.recver.Receive()
 		if err != nil {
 			return
 		}
 		if len(data) == 0 {
+			continue
+		}
+		if !r.accept.allow(srcIP) {
 			continue
 		}
 		if _, err := r.udpConn.WriteToUDP(data, r.fwdAddr); err != nil {
@@ -168,6 +186,11 @@ func (r *Remote) statsLoop() {
 }
 
 func (r *Remote) Close() {
+	select {
+	case <-r.stop:
+	default:
+		close(r.stop)
+	}
 	r.recver.Close()
 	r.sender.Close()
 	r.udpConn.Close()

@@ -21,6 +21,11 @@ type Config struct {
 	SpoofIP     string `json:"spoof_ip,omitempty"`
 	SpoofPort   int    `json:"spoof_port,omitempty"`
 	PeerSpoofIP string `json:"peer_spoof_ip,omitempty"`
+	// PeerSpoofIPFile is a file of the peer's forged source IPs (one per line)
+	// that are accepted on receive — set it to the peer's spoof_ip_file so a
+	// rotating multi-IP peer is not filtered down to one. Hot-reloaded. Empty
+	// defaults to spoof_ip_file when that is set (symmetric pool).
+	PeerSpoofIPFile string `json:"peer_spoof_ip_file,omitempty"`
 
 	// Remote mode
 	ListenPort int    `json:"listen_port,omitempty"`

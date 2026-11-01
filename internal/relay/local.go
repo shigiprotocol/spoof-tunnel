@@ -11,23 +11,28 @@ import (
 
 // LocalConfig configures the local (client) relay.
 type LocalConfig struct {
-	ListenAddr    string
-	RemoteIP      net.IP
-	RemotePort    uint16
-	RecvPort      uint16
-	SpoofIP       net.IP
-	SpoofIPs      []net.IP
-	SpoofPort     uint16
-	PeerSpoofIP   net.IP
-	SendTransport string // "tcp", "udp", "icmp", "icmpv6"
-	RecvTransport string // "tcp", "udp", "icmp", "icmpv6"
-	XDPInterface  string // network interface for XDP (empty = disabled)
+	ListenAddr      string
+	RemoteIP        net.IP
+	RemotePort      uint16
+	RecvPort        uint16
+	SpoofIP         net.IP
+	SpoofIPs        []net.IP
+	SpoofIPFile     string // pool file for hot-reload of forged sources (empty = none)
+	SpoofPort       uint16
+	PeerSpoofIP     net.IP   // single pinned peer source (back-compat)
+	PeerSpoofIPs    []net.IP // set of accepted peer sources (multi-IP); empty = use PeerSpoofIP
+	PeerSpoofIPFile string   // pool file for hot-reload of the accept set (empty = none)
+	SendTransport   string   // "tcp", "udp", "icmp", "icmpv6"
+	RecvTransport   string   // "tcp", "udp", "icmp", "icmpv6"
+	XDPInterface    string   // network interface for XDP (empty = disabled)
 }
 
 type Local struct {
 	cfg     LocalConfig
 	udpConn *net.UDPConn
-	sender  transport.Sender
+	sender  *swapSender
+	accept  acceptSet
+	stop    chan struct{}
 	recver  transport.Receiver
 
 	lastAppAddr atomic.Pointer[net.UDPAddr]
@@ -70,17 +75,11 @@ func NewLocal(cfg LocalConfig) (*Local, error) {
 		return nil, err
 	}
 
-	senderCfg := transport.SenderConfig{
-		SourcePort: cfg.SpoofPort,
-		MTU:        1400,
+	senderIPs := cfg.SpoofIPs
+	if len(senderIPs) == 0 {
+		senderIPs = []net.IP{cfg.SpoofIP}
 	}
-	if len(cfg.SpoofIPs) > 0 {
-		senderCfg.SourceIPs = cfg.SpoofIPs
-	} else {
-		senderCfg.SourceIP = cfg.SpoofIP
-	}
-
-	sender, err := transport.NewSender(cfg.SendTransport, senderCfg)
+	sender, err := newSwapSender(cfg.SendTransport, cfg.SpoofPort, 1400, senderIPs)
 	if err != nil {
 		udpConn.Close()
 		if icmpSuppressed {
@@ -89,9 +88,17 @@ func NewLocal(cfg LocalConfig) (*Local, error) {
 		return nil, err
 	}
 
+	// With a set of accepted peer sources, let the receiver accept any source
+	// (pass nil) and filter the set here in Go, so the peer can rotate a pool of
+	// forged sources without the receiver dropping all but one. A single pinned
+	// peer IP keeps the original kernel/Rust-side filtering.
+	recvPeer := cfg.PeerSpoofIP
+	if len(cfg.PeerSpoofIPs) > 0 {
+		recvPeer = nil
+	}
 	recver, err := transport.NewReceiver(cfg.RecvTransport, transport.ReceiverConfig{
 		ListenPort:   cfg.RecvPort,
-		PeerSpoofIP:  cfg.PeerSpoofIP,
+		PeerSpoofIP:  recvPeer,
 		BufferSize:   4 * 1024 * 1024,
 		UseXDP:       cfg.XDPInterface != "",
 		XDPInterface: cfg.XDPInterface,
@@ -105,18 +112,28 @@ func NewLocal(cfg LocalConfig) (*Local, error) {
 		return nil, err
 	}
 
-	return &Local{
+	l := &Local{
 		cfg:            cfg,
 		udpConn:        udpConn,
 		sender:         sender,
 		recver:         recver,
+		stop:           make(chan struct{}),
 		icmpSuppressed: icmpSuppressed,
-	}, nil
+	}
+	l.accept.set(cfg.PeerSpoofIPs)
+	return l, nil
 }
 
 func (l *Local) Run() {
 	go l.uplinkLoop()
 	go l.statsLoop()
+	go poolReloader(l.stop, defaultReloadInterval,
+		l.cfg.SpoofIPFile, func(ips []net.IP) {
+			if err := l.sender.setIPs(ips); err != nil {
+				log.Printf("[reload] applying forged sources: %v", err)
+			}
+		},
+		l.cfg.PeerSpoofIPFile, l.accept.set)
 	l.downlinkLoop()
 }
 
@@ -141,11 +158,16 @@ func (l *Local) uplinkLoop() {
 
 func (l *Local) downlinkLoop() {
 	for {
-		data, _, _, err := l.recver.Receive()
+		data, srcIP, _, err := l.recver.Receive()
 		if err != nil {
 			return
 		}
 		if len(data) == 0 {
+			continue
+		}
+		// Drop packets whose forged source is not in the accepted peer set
+		// (no-op when no set is configured).
+		if !l.accept.allow(srcIP) {
 			continue
 		}
 		appAddr := l.lastAppAddr.Load()
@@ -171,6 +193,11 @@ func (l *Local) statsLoop() {
 }
 
 func (l *Local) Close() {
+	select {
+	case <-l.stop:
+	default:
+		close(l.stop)
+	}
 	l.udpConn.Close()
 	l.sender.Close()
 	l.recver.Close()

@@ -53,12 +53,12 @@ func runCmd() *cobra.Command {
 			switch cfg.Mode {
 			case "local":
 				runLocal(cfg.Listen, cfg.Remote, cfg.RemotePort, cfg.RecvPort,
-					cfg.SpoofIP, cfg.SpoofPort, cfg.PeerSpoofIP, cfg.SpoofIPFile,
+					cfg.SpoofIP, cfg.SpoofPort, cfg.PeerSpoofIP, cfg.SpoofIPFile, cfg.PeerSpoofIPFile,
 					cfg.SendTransport, cfg.RecvTransport, cfg.XDPInterface)
 			case "remote":
 				runRemote(cfg.ListenPort, cfg.Forward, cfg.ClientIP, cfg.ClientPort,
 					cfg.SpoofIP, cfg.SpoofPort, cfg.PeerSpoofIP,
-					cfg.SpoofIPFile, cfg.SendTransport, cfg.RecvTransport, cfg.XDPInterface)
+					cfg.SpoofIPFile, cfg.PeerSpoofIPFile, cfg.SendTransport, cfg.RecvTransport, cfg.XDPInterface)
 			default:
 				log.Fatalf("unknown mode in config: %q", cfg.Mode)
 			}
@@ -71,18 +71,19 @@ func runCmd() *cobra.Command {
 
 func localCmd() *cobra.Command {
 	var (
-		listen        string
-		remoteAddr    string
-		remotePort    int
-		recvPort      int
-		spoofIP       string
-		spoofPort     int
-		peerSpoofIP   string
-		spoofIPFile   string
-		sendTransport string
-		recvTransport string
-		xdpInterface  string
-		configFile    string
+		listen          string
+		remoteAddr      string
+		remotePort      int
+		recvPort        int
+		spoofIP         string
+		spoofPort       int
+		peerSpoofIP     string
+		spoofIPFile     string
+		peerSpoofIPFile string
+		sendTransport   string
+		recvTransport   string
+		xdpInterface    string
+		configFile      string
 	)
 
 	cmd := &cobra.Command{
@@ -105,6 +106,9 @@ func localCmd() *cobra.Command {
 			if fileCfg != nil {
 				listen, remoteAddr, remotePort, recvPort, spoofIP, spoofPort, peerSpoofIP, spoofIPFile, sendTransport, recvTransport =
 					fileCfg.MergeLocal(listen, remoteAddr, remotePort, recvPort, spoofIP, spoofPort, peerSpoofIP, spoofIPFile, sendTransport, recvTransport)
+				if peerSpoofIPFile == "" {
+					peerSpoofIPFile = fileCfg.PeerSpoofIPFile
+				}
 			}
 
 			if remoteAddr == "" {
@@ -114,7 +118,7 @@ func localCmd() *cobra.Command {
 				log.Fatal("--spoof-ip or --spoof-ip-file is required")
 			}
 
-			runLocal(listen, remoteAddr, remotePort, recvPort, spoofIP, spoofPort, peerSpoofIP, spoofIPFile, sendTransport, recvTransport, xdpInterface)
+			runLocal(listen, remoteAddr, remotePort, recvPort, spoofIP, spoofPort, peerSpoofIP, spoofIPFile, peerSpoofIPFile, sendTransport, recvTransport, xdpInterface)
 		},
 	}
 
@@ -125,7 +129,8 @@ func localCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&spoofIP, "spoof-ip", "s", "", "spoofed source IP (single)")
 	cmd.Flags().IntVar(&spoofPort, "spoof-port", 443, "spoofed source port")
 	cmd.Flags().StringVar(&peerSpoofIP, "peer-spoof-ip", "", "expected source IP of server packets")
-	cmd.Flags().StringVar(&spoofIPFile, "spoof-ip-file", "", "file with spoof IPs (one per line, round-robin)")
+	cmd.Flags().StringVar(&spoofIPFile, "spoof-ip-file", "", "file with spoof IPs (one per line, round-robin, hot-reloaded)")
+	cmd.Flags().StringVar(&peerSpoofIPFile, "peer-spoof-ip-file", "", "file with the peer's spoof IPs to accept (one per line, hot-reloaded); default = --spoof-ip-file")
 	cmd.Flags().StringVar(&sendTransport, "send-transport", "", "send transport: tcp, udp, icmp, icmpv6 (default: tcp)")
 	cmd.Flags().StringVar(&recvTransport, "recv-transport", "", "recv transport: tcp, udp, icmp, icmpv6 (default: udp)")
 	cmd.Flags().StringVar(&xdpInterface, "xdp-interface", "", "network interface for XDP acceleration (e.g. eth0)")
@@ -136,18 +141,19 @@ func localCmd() *cobra.Command {
 
 func remoteCmd() *cobra.Command {
 	var (
-		listenPort    int
-		forward       string
-		clientIP      string
-		clientPort    int
-		spoofIP       string
-		spoofPort     int
-		peerSpoofIP   string
-		spoofIPFile   string
-		sendTransport string
-		recvTransport string
-		xdpInterface  string
-		configFile    string
+		listenPort      int
+		forward         string
+		clientIP        string
+		clientPort      int
+		spoofIP         string
+		spoofPort       int
+		peerSpoofIP     string
+		spoofIPFile     string
+		peerSpoofIPFile string
+		sendTransport   string
+		recvTransport   string
+		xdpInterface    string
+		configFile      string
 	)
 
 	cmd := &cobra.Command{
@@ -170,6 +176,9 @@ func remoteCmd() *cobra.Command {
 			if fileCfg != nil {
 				listenPort, forward, clientIP, clientPort, spoofIP, spoofPort, peerSpoofIP, spoofIPFile, sendTransport, recvTransport =
 					fileCfg.MergeRemote(listenPort, forward, clientIP, clientPort, spoofIP, spoofPort, peerSpoofIP, spoofIPFile, sendTransport, recvTransport)
+				if peerSpoofIPFile == "" {
+					peerSpoofIPFile = fileCfg.PeerSpoofIPFile
+				}
 			}
 
 			if clientIP == "" {
@@ -179,7 +188,7 @@ func remoteCmd() *cobra.Command {
 				log.Fatal("--spoof-ip or --spoof-ip-file is required")
 			}
 
-			runRemote(listenPort, forward, clientIP, clientPort, spoofIP, spoofPort, peerSpoofIP, spoofIPFile, sendTransport, recvTransport, xdpInterface)
+			runRemote(listenPort, forward, clientIP, clientPort, spoofIP, spoofPort, peerSpoofIP, spoofIPFile, peerSpoofIPFile, sendTransport, recvTransport, xdpInterface)
 		},
 	}
 
@@ -190,7 +199,8 @@ func remoteCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&spoofIP, "spoof-ip", "s", "", "spoofed source IP (single)")
 	cmd.Flags().IntVar(&spoofPort, "spoof-port", 8090, "spoofed source port")
 	cmd.Flags().StringVar(&peerSpoofIP, "peer-spoof-ip", "", "expected source IP of client packets")
-	cmd.Flags().StringVar(&spoofIPFile, "spoof-ip-file", "", "file with spoof IPs (one per line, round-robin)")
+	cmd.Flags().StringVar(&spoofIPFile, "spoof-ip-file", "", "file with spoof IPs (one per line, round-robin, hot-reloaded)")
+	cmd.Flags().StringVar(&peerSpoofIPFile, "peer-spoof-ip-file", "", "file with the peer's spoof IPs to accept (one per line, hot-reloaded); default = --spoof-ip-file")
 	cmd.Flags().StringVar(&sendTransport, "send-transport", "", "send transport: tcp, udp, icmp, icmpv6 (default: udp)")
 	cmd.Flags().StringVar(&recvTransport, "recv-transport", "", "recv transport: tcp, udp, icmp, icmpv6 (default: tcp)")
 	cmd.Flags().StringVar(&xdpInterface, "xdp-interface", "", "network interface for XDP acceleration (e.g. eth0)")
@@ -215,7 +225,7 @@ func loadSpoofIPs(spoofIP, spoofIPFile string) ([]net.IP, error) {
 	return []net.IP{ip}, nil
 }
 
-func runLocal(listen, remoteAddr string, remotePort, recvPort int, spoofIP string, spoofPort int, peerSpoofIP, spoofIPFile, sendTransport, recvTransport, xdpInterface string) {
+func runLocal(listen, remoteAddr string, remotePort, recvPort int, spoofIP string, spoofPort int, peerSpoofIP, spoofIPFile, peerSpoofIPFile, sendTransport, recvTransport, xdpInterface string) {
 	rIP := net.ParseIP(remoteAddr)
 	if rIP == nil {
 		log.Fatalf("invalid remote IP: %s", remoteAddr)
@@ -234,6 +244,20 @@ func runLocal(listen, remoteAddr string, remotePort, recvPort int, spoofIP strin
 		}
 	}
 
+	// Accept set of the peer's forged sources. Defaults to spoof_ip_file when no
+	// explicit peer file / single peer IP is given (both ends share one pool).
+	if peerSpoofIPFile == "" && peerSpoofIP == "" && spoofIPFile != "" {
+		peerSpoofIPFile = spoofIPFile
+	}
+	var peerSpoofIPs []net.IP
+	if peerSpoofIPFile != "" {
+		peerSpoofIPs, err = config.LoadIPListFile(peerSpoofIPFile)
+		if err != nil {
+			log.Fatalf("load peer spoof IPs: %v", err)
+		}
+		log.Printf("accepting %d peer spoof IP(s) from %s", len(peerSpoofIPs), peerSpoofIPFile)
+	}
+
 	if listen == "" {
 		listen = "127.0.0.1:5000"
 	}
@@ -247,16 +271,19 @@ func runLocal(listen, remoteAddr string, remotePort, recvPort int, spoofIP strin
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 
 	cfg := relay.LocalConfig{
-		ListenAddr:    listen,
-		RemoteIP:      rIP,
-		RemotePort:    uint16(remotePort),
-		RecvPort:      uint16(recvPort),
-		SpoofIPs:      spoofIPs,
-		SpoofPort:     uint16(spoofPort),
-		PeerSpoofIP:   psIP,
-		SendTransport: sendTransport,
-		RecvTransport: recvTransport,
-		XDPInterface:  xdpInterface,
+		ListenAddr:      listen,
+		RemoteIP:        rIP,
+		RemotePort:      uint16(remotePort),
+		RecvPort:        uint16(recvPort),
+		SpoofIPs:        spoofIPs,
+		SpoofIPFile:     spoofIPFile,
+		SpoofPort:       uint16(spoofPort),
+		PeerSpoofIP:     psIP,
+		PeerSpoofIPs:    peerSpoofIPs,
+		PeerSpoofIPFile: peerSpoofIPFile,
+		SendTransport:   sendTransport,
+		RecvTransport:   recvTransport,
+		XDPInterface:    xdpInterface,
 	}
 
 	l, err := relay.NewLocal(cfg)
@@ -289,7 +316,7 @@ func runLocal(listen, remoteAddr string, remotePort, recvPort int, spoofIP strin
 	l.Run()
 }
 
-func runRemote(listenPort int, forward, clientIP string, clientPort int, spoofIP string, spoofPort int, peerSpoofIP string, spoofIPFile, sendTransport, recvTransport, xdpInterface string) {
+func runRemote(listenPort int, forward, clientIP string, clientPort int, spoofIP string, spoofPort int, peerSpoofIP string, spoofIPFile, peerSpoofIPFile, sendTransport, recvTransport, xdpInterface string) {
 	cIP := net.ParseIP(clientIP)
 	if cIP == nil {
 		log.Fatalf("invalid client-ip: %s", clientIP)
@@ -308,6 +335,18 @@ func runRemote(listenPort int, forward, clientIP string, clientPort int, spoofIP
 		}
 	}
 
+	if peerSpoofIPFile == "" && peerSpoofIP == "" && spoofIPFile != "" {
+		peerSpoofIPFile = spoofIPFile
+	}
+	var peerSpoofIPs []net.IP
+	if peerSpoofIPFile != "" {
+		peerSpoofIPs, err = config.LoadIPListFile(peerSpoofIPFile)
+		if err != nil {
+			log.Fatalf("load peer spoof IPs: %v", err)
+		}
+		log.Printf("accepting %d peer spoof IP(s) from %s", len(peerSpoofIPs), peerSpoofIPFile)
+	}
+
 	if sendTransport == "" {
 		sendTransport = "udp"
 	}
@@ -318,16 +357,19 @@ func runRemote(listenPort int, forward, clientIP string, clientPort int, spoofIP
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 
 	cfg := relay.RemoteConfig{
-		ListenPort:    uint16(listenPort),
-		ForwardAddr:   forward,
-		ClientIP:      cIP,
-		ClientPort:    uint16(clientPort),
-		SpoofIPs:      spoofIPs,
-		SpoofPort:     uint16(spoofPort),
-		PeerSpoofIP:   psIP,
-		SendTransport: sendTransport,
-		RecvTransport: recvTransport,
-		XDPInterface:  xdpInterface,
+		ListenPort:      uint16(listenPort),
+		ForwardAddr:     forward,
+		ClientIP:        cIP,
+		ClientPort:      uint16(clientPort),
+		SpoofIPs:        spoofIPs,
+		SpoofIPFile:     spoofIPFile,
+		SpoofPort:       uint16(spoofPort),
+		PeerSpoofIP:     psIP,
+		PeerSpoofIPs:    peerSpoofIPs,
+		PeerSpoofIPFile: peerSpoofIPFile,
+		SendTransport:   sendTransport,
+		RecvTransport:   recvTransport,
+		XDPInterface:    xdpInterface,
 	}
 
 	r, err := relay.NewRemote(cfg)
