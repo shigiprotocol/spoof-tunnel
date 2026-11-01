@@ -30,15 +30,15 @@ jobs:
         with:
           workspaces: rust/xdp-ebpf
 
-      - name: Install LLVM 21 (required by bpf-linker 0.12)
+      - name: Install LLVM 23 (matches nightly rustc LLVM, required by bpf-linker 0.12)
         run: |
           wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 21
-          echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
+          sudo ./llvm.sh 23
+          echo "/usr/lib/llvm-23/bin" >> "$GITHUB_PATH"
 
       - name: Install bpf-linker
-        run: cargo install bpf-linker --version 0.12.0 --no-default-features --features llvm-21
+        run: cargo install bpf-linker --version 0.12.0
 
       - name: Build eBPF program
         working-directory: rust/xdp-ebpf
