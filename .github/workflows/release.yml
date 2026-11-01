@@ -38,7 +38,7 @@ jobs:
           echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
 
       - name: Install bpf-linker
-        run: cargo install bpf-linker --version 0.12.0
+        run: cargo install bpf-linker --version 0.12.0 --no-default-features --features llvm-21
 
       - name: Build eBPF program
         working-directory: rust/xdp-ebpf
