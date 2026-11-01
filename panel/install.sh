@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Spoof Panel Installer
-# Usage: bash <(curl -Ls https://raw.githubusercontent.com/ParsaKSH/spoof-tunnel/main/panel/install.sh)
+# Usage: bash <(curl -Ls https://raw.githubusercontent.com/shigiprotocol/spoof-tunnel/main/panel/install.sh)
 
 set -e
 
@@ -12,7 +12,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 BOLD='\033[1m'
 
-REPO="ParsaKSH/spoof-tunnel"
+REPO="shigiprotocol/spoof-tunnel"
 INSTALL_DIR="/usr/local/bin"
 DATA_DIR="/etc/spoof-panel"
 SERVICE_NAME="spoof-panel"
